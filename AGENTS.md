@@ -10,7 +10,7 @@
 ┌─────────────────────────────────────────┐
 │            exam-analysis.html            │
 ├─────────────────────────────────────────┤
-│  HTML：5大分析板块 + 上传/配置/导出      │
+│  HTML：7大分析板块 + 上传/配置/导出      │
 │  CSS：Anthropic 品牌配色，满宽布局，分页 │
 │  JS：数据引擎 + 图表渲染 + PDF 导出      │
 └─────────────────────────────────────────┘
@@ -21,7 +21,7 @@
 ```
 Excel(.xlsx) → SheetJS 解析 → 检测科类/科目
   → 按学校分组 → 按科类筛选 → 批次线判定
-  → 尖子生筛选 → 贡献度计算
+  → 尖子生筛选 → 排名 → 贡献度计算
   → Chart.js 渲染 → html2pdf 导出
 ```
 
@@ -35,24 +35,34 @@ Excel(.xlsx) → SheetJS 解析 → 检测科类/科目
 | `detectSubjects` | 自动识别科目列与科类 |
 | `populateBatchTable` | 批次线配置表渲染 |
 | `populateSchoolSelect` | 学校选择列表渲染 |
-| `generateAnalysis` | 主分析入口，触发5板块渲染 |
-| `computeResult` | 按科类计算上线/尖子生/贡献度数据 |
-| `renderCutoff` | 上线对比板块渲染 |
-| `renderTopStudents` | 尖子生分层板块渲染 |
-| `renderPctCompare` | 前30%均分板块渲染 |
-| `renderElite` | 优秀生分布板块渲染 |
-| `renderContribution` | 学科贡献度板块渲染 |
-| `exportPDF` | PDF 导出（Landscape A4，分页） |
+| `generateAnalysis` | 主分析入口，触发所有板块渲染 |
+| `computeResult` | 按科类计算上线/尖子生/贡献度/优秀生数据 |
+| `renderOverview` | 联考概览板块（信息卡片+批次线+各校数据） |
+| `renderCutoff` | 上线对比板块（人数柱状图 + 率值折线图两张独立图） |
+| `renderRanking` | 尖子生排名板块（物理前30/历史前10学生成绩表） |
+| `renderTopStudents` | 尖子生分层板块（学校维度柱状图 + 双Y轴 + 跨层趋势） |
+| `renderTopPct` | 前30%均分板块（学校维度柱状图 + 双Y轴） |
+| `renderElite` | 优秀生分布板块（所有阈值合并一张100%堆积图） |
+| `renderContribution` | 学科贡献度板块（按学校独立气泡图） |
+| `exportPDF` | PDF 导出（Landscape A4，分页，自动展开子标签） |
 
 ### 科类切换机制
 
-每个分析板块独立管理 物理/历史 切换（通过 `switchCutoff`、`switchTopCate`、`switchPctCate`、`switchEliteCate`、`switchContribCate`），不再使用全局科类切换。
+每个分析板块独立管理 物理/历史 切换（通过 `switchCutoff`、`switchRankCate`、`switchTopCate`、`switchPctCate`、`switchEliteCate`、`switchContribCate`），不再使用全局科类切换。
 
 ### 子标签机制
 
-- **尖子生**：`switchTopTab` — 前30/100/200名 + 趋势
-- **优秀生**：`switchEliteTab` — 前10/20/50/100/200名
+- **尖子生分层**：`switchTopTab` — 前30/100/200名选择，懒加载渲染
+- **优秀生**：合并为一张图，不再有子标签
 - **贡献度**：`switchContribSchool` — 按学校切换
+- **联考概览**：无标签，一次显示所有信息
+
+### 分析板块顺序
+
+```
+联考概览 → 各校上线对比 → 尖子生排名 → 尖子生分层均分对比
+  → 前30%均分对比 → 优秀生分布 → 学科贡献度
+```
 
 ## 批次线系统
 
@@ -74,10 +84,11 @@ Excel(.xlsx) → SheetJS 解析 → 检测科类/科目
 
 ## 样式约定
 
-- **配色**: Anthropic 品牌色
-- **字号**: ≥18px
-- **布局**: 满宽图表 + 满宽表格上下排布
+- **配色**: Anthropic 品牌色（深 #141413, 浅 #faf9f5, 橙 #d97757, 蓝 #6a9bcc, 绿 #788c5d）
+- **字号**: ≥18px，图表标签 15-18px
+- **布局**: 满宽图表 + 满宽表格上下排布，不左右分栏
 - **打印**: Landscape A4, `page-break-before: always` 分段
+- **图表尺寸**: 宽高比 2:1（趋势图 2.2:1）
 
 ## 已知限制
 
