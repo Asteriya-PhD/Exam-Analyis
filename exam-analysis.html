@@ -8,7 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
 /* ============================================
    RESET & BASE
@@ -644,7 +644,7 @@ small { font-size: 14px; color: var(--color-mid-gray); }
     </div>
     <div class="header-actions">
       <button class="btn btn-primary" id="btnExportPDF" onclick="exportPDF()" disabled>
-        📄 导出 PDF
+        📦 导出图表
       </button>
     </div>
   </div>
@@ -711,7 +711,11 @@ small { font-size: 14px; color: var(--color-mid-gray); }
     <!-- Batch cutoffs -->
     <div class="config-group" style="margin-top:8px;">
       <label>批次划线标准</label>
-      <div class="hint">总分划线和各科单科划线。只需填写本次联考对应的批次线数值。</div>
+      <div class="hint">物理类和历史类分别填写各自的划线。总分线和各科单科线均需填写。</div>
+      <div class="sub-tabs" style="margin-bottom:12px;" id="batchCateTabs">
+        <button class="sub-tab active" data-cate="物理" onclick="switchBatchCate('物理')">物理类</button>
+        <button class="sub-tab" data-cate="历史" onclick="switchBatchCate('历史')">历史类</button>
+      </div>
       <div class="batch-table-wrap">
         <table class="batch-table" id="batchTable">
           <thead>
@@ -729,8 +733,8 @@ small { font-size: 14px; color: var(--color-mid-gray); }
               <th>地理</th>
             </tr>
           </thead>
-          <tbody id="batchTableBody">
-          </tbody>
+          <tbody id="batchTableBody_物理"></tbody>
+          <tbody id="batchTableBody_历史" style="display:none;"></tbody>
         </table>
       </div>
     </div>
@@ -798,7 +802,7 @@ function detectSubjects(rows) {
 const BATCH_NAMES = ['超一流','600分','双一流','一本线'];
 // School color palette
 const SCHOOL_COLORS = [
-  '#d97757','#6a9bcc','#788c5d','#8b6faf','#c47f5a','#5a8f7b',
+  '#6a9bcc','#d97757','#8b6faf','#788c5d','#c47f5a','#5a8f7b',
   '#b8736a','#5f9ea0','#b8865a','#7b68a0'
 ];
 
@@ -1025,7 +1029,7 @@ function analyzeContribution(rows, schools, batchLines, cate, mainBatch) {
 function computeResult(cate) {
   const rows = window._filteredRaw;
   const schools = window._selectedSchools;
-  const batchLines = window._batchLines;
+  const batchLines = window._batchLines[cate] || {};
 
   const cateRows = getRowsByCategory(rows, cate);
   const filteredSchools = schools.filter(s => cateRows.some(r => r.school === s));
@@ -1105,8 +1109,14 @@ function destroyCharts(prefix) {
   Object.keys(chartInstances).filter(k => k.startsWith(prefix)).forEach(k => destroyChart(k));
 }
 
-function getSchoolColor(index) {
-  return SCHOOL_COLORS[index % SCHOOL_COLORS.length];
+function getSchoolColor(nameOrIndex) {
+  if (typeof nameOrIndex === 'string') {
+    const order = window._schoolOrder || [];
+    const idx = order.indexOf(nameOrIndex);
+    if (idx >= 0) return SCHOOL_COLORS[idx % SCHOOL_COLORS.length];
+    return '#888';
+  }
+  return SCHOOL_COLORS[nameOrIndex % SCHOOL_COLORS.length];
 }
 
 const SUBJECT_COLORS = {
@@ -1118,6 +1128,80 @@ const SUBJECT_COLORS = {
 function getSubjectColor(key) { return SUBJECT_COLORS[key] || '#888'; }
 
 Chart.register(ChartDataLabels);
+
+// Helper: draw a table on an offscreen canvas and return the canvas element
+function drawTableOnCanvas(headers, rows, colWidths, options) {
+  const pxPerMm = 10;
+  const totalWidthMM = colWidths.reduce((a,b)=>a+b,0);
+  const widthPx = Math.round(totalWidthMM * pxPerMm);
+  const headerHm = 9;
+  const rowHm = 8;
+  const headerHpx = Math.round(headerHm * pxPerMm);
+  const rowHpx = Math.round(rowHm * pxPerMm);
+  const fontScale = pxPerMm / 4;
+  const heightPx = headerHpx + rows.length * rowHpx;
+  const canvas = document.createElement('canvas');
+  canvas.width = widthPx;
+  canvas.height = heightPx;
+  const ctx = canvas.getContext('2d');
+  const headerColor = (options && options.headerColor) || '#141413';
+  ctx.fillStyle = headerColor;
+  ctx.fillRect(0, 0, canvas.width, headerHpx);
+  // Header text
+  ctx.fillStyle = (options && options.headerTextColor) || '#fff';
+  const fontSize = Math.max(8, Math.round((options && options.fontSize) || 14)) * fontScale;
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let x = 0;
+  for (let i = 0; i < headers.length; i++) {
+    const w = Math.round((colWidths[i] || 10) * pxPerMm);
+    ctx.fillText(String(headers[i]), x + w/2, headerHpx/2);
+    // vertical lines
+    ctx.strokeStyle = '#e5e5e5';
+    ctx.beginPath(); ctx.moveTo(x+w, 0); ctx.lineTo(x+w, canvas.height); ctx.stroke();
+    x += w;
+  }
+  // Data rows
+  ctx.fillStyle = '#000';
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let r = 0; r < rows.length; r++) {
+    const y = headerHpx + r * rowHpx;
+    // zebra background
+    ctx.fillStyle = (r % 2 === 0) ? '#fff' : '#f9f9f9';
+    ctx.fillRect(0, y, canvas.width, rowHpx);
+    let cx = 0;
+    for (let c = 0; c < headers.length; c++) {
+      const w = Math.round((colWidths[c] || 10) * pxPerMm);
+      const cell = rows[r][c] != null ? String(rows[r][c]) : '';
+      ctx.fillStyle = '#000';
+      ctx.fillText(cell, cx + w/2, y + rowHpx/2);
+      // vertical line
+      ctx.strokeStyle = '#e3e3e3';
+      ctx.beginPath(); ctx.moveTo(cx+w, 0); ctx.lineTo(cx+w, canvas.height); ctx.stroke();
+      cx += w;
+    }
+  }
+  return canvas;
+}
+
+// Helper: convert a Chart.js chart to high-res image data URL
+function chartToImage(chartInstance) {
+  if (!chartInstance || !chartInstance.canvas) return null;
+  try {
+    const w = chartInstance.width || chartInstance.canvas.width;
+    const h = chartInstance.height || chartInstance.canvas.height;
+    if (!w || !h || w <= 0 || h <= 0) return null;
+    if (typeof chartInstance.toBase64Image === 'function') {
+      return chartInstance.toBase64Image('image/png', 2);
+    }
+    return chartInstance.canvas.toDataURL('image/png');
+  } catch (e) {
+    return null;
+  }
+}
 
 // =============================================================
 // SECTION 0: 联考概览
@@ -1165,26 +1249,31 @@ function renderOverview() {
   }
   html += `</div>`;
 
-  // Batch cutoff lines
-  const batchNames = Object.keys(batchLines);
-  if (batchNames.length > 0) {
+  // Batch cutoff lines per category
+  const allBatchLines = window._batchLines || {};
+  const cateBatchNames = ['物理', '历史'].filter(c => allBatchLines[c] && Object.keys(allBatchLines[c]).length > 0);
+  if (cateBatchNames.length > 0) {
     html += `<div class="overview-subsection"><h3>批次划线信息</h3>`;
-    html += `<table class="data-table"><thead><tr><th>批次</th><th>总分线</th>`;
-    for (let key of ['yw','sx','yy','wl','ls','hx','sw','zz','dl']) {
-      if (batchNames.some(b => batchLines[b][key] > 0)) html += `<th>${keyToName(key)}</th>`;
-    }
-    html += `</tr></thead><tbody>`;
-    for (let batch of batchNames) {
-      const line = batchLines[batch];
-      html += `<tr><td><strong>${batch}</strong></td><td>${line.total||'-'}</td>`;
-      for (let key of ['yw','sx','yy','wl','ls','hx','sw','zz','dl']) {
-        if (batchNames.some(b => batchLines[b][key] > 0)) {
+    for (let cate of cateBatchNames) {
+      const lines = allBatchLines[cate];
+      const batchNames = Object.keys(lines).filter(b => lines[b] && lines[b].total > 0);
+      if (batchNames.length === 0) continue;
+      html += `<p style="font-weight:600;margin:12px 0 4px;">${cate}类</p>`;
+      const activeKeys = ['yw','sx','yy','wl','ls','hx','sw','zz','dl'].filter(k => batchNames.some(b => lines[b][k] > 0));
+      html += `<table class="data-table"><thead><tr><th>批次</th><th>总分线</th>`;
+      for (let key of activeKeys) html += `<th>${keyToName(key)}</th>`;
+      html += `</tr></thead><tbody>`;
+      for (let batch of batchNames) {
+        const line = lines[batch];
+        html += `<tr><td><strong>${batch}</strong></td><td>${line.total||'-'}</td>`;
+        for (let key of activeKeys) {
           html += `<td>${line[key] > 0 ? line[key] : '-'}</td>`;
         }
+        html += `</tr>`;
       }
-      html += `</tr>`;
+      html += `</tbody></table>`;
     }
-    html += `</tbody></table></div>`;
+    html += `</div>`;
   }
 
   // School overview table
@@ -1213,7 +1302,8 @@ function renderCutoff(cate) {
   destroyCharts('cutoff_');
 
   const { validSchools, cutoffData } = result;
-  const batchNames = Object.keys(window._batchLines);
+  const batchLines = window._batchLines[cate] || {};
+  const batchNames = Object.keys(batchLines);
   const batchColors = ['#d97757','#6a9bcc','#788c5d','#8b6faf','#5a8f7b','#c47f5a'];
   const cats = window._categories || [];
 
@@ -1425,8 +1515,8 @@ function renderTopStudents(cate) {
       if (!canvas) return;
       const datasets = validSchools.map((s,i) => ({
         label: s, data: trendData[s]||[],
-        borderColor: getSchoolColor(i), backgroundColor: getSchoolColor(i),
-        pointBackgroundColor: getSchoolColor(i), pointRadius: 6, pointHoverRadius: 10,
+        borderColor: getSchoolColor(s), backgroundColor: getSchoolColor(s),
+        pointBackgroundColor: getSchoolColor(s), pointRadius: 6, pointHoverRadius: 10,
         borderWidth: 3, hoverBorderWidth: 5, tension: 0.3, fill: false,
         datalabels: { display: false }
       }));
@@ -1759,7 +1849,7 @@ function renderElite(cate) {
     const datasets = sortedSchools.map((s, si) => ({
       label: s,
       data: eliteThresholds.map(t => ((eliteData[t].counts[s]||0) / Math.max(eliteData[t].total, 1) * 100)),
-      backgroundColor: getSchoolColor(si),
+      backgroundColor: getSchoolColor(s),
       borderRadius: 0,
       barPercentage: 0.45,
       categoryPercentage: 0.7,
@@ -1873,18 +1963,34 @@ function renderContribChart(cate, si, school, sc, subjKeys) {
   const subjectColors = ['#d97757','#6a9bcc','#788c5d','#8b6faf','#c47f5a','#5a8f7b','#b8736a'];
   let ci = 0;
   const datasets = [];
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+
   for (let sk of subjKeys) {
     const d = sc[sk];
     if (!d || d.refCount === 0) continue;
     const color = subjectColors[ci++ % subjectColors.length];
+    const xVal = d.contribRate * 100;
+    const yVal = d.hitRate * 100;
+    xMin = Math.min(xMin, xVal);
+    xMax = Math.max(xMax, xVal);
+    yMin = Math.min(yMin, yVal);
+    yMax = Math.max(yMax, yVal);
     datasets.push({
       label: keyToName(sk),
-      data: [{ x: d.contribRate * 100, y: d.hitRate * 100, r: Math.max(8, Math.min(22, d.refCount / 10)) }],
+      data: [{ x: xVal, y: yVal, r: 8 }],
       backgroundColor: color + '88',
       borderColor: color,
       borderWidth: 2,
     });
   }
+
+  // Smart axis scaling with padding
+  const xPad = Math.max((xMax - xMin) * 0.15, 5);
+  const yPad = Math.max((yMax - yMin) * 0.15, 5);
+  const smartXMin = Math.max(0, Math.floor(xMin - xPad));
+  const smartXMax = Math.min(100, Math.ceil(xMax + xPad));
+  const smartYMin = Math.max(0, Math.floor(yMin - yPad));
+  const smartYMax = Math.min(100, Math.ceil(yMax + yPad));
 
   chartInstances[`contrib_${cate}_${si}`] = new Chart(canvas, {
     type: 'bubble',
@@ -1897,8 +2003,8 @@ function renderContribChart(cate, si, school, sc, subjKeys) {
         datalabels: { display: false }
       },
       scales: {
-        x: { beginAtZero: true, max: 100, title: { display: true, text: '贡献率 (%)', font: { size: 18 } }, ticks: { font: { size: 16 }, callback: v => v + '%' }, grid: { color: '#e8e6dc' } },
-        y: { beginAtZero: true, max: 100, title: { display: true, text: '命中率 (%)', font: { size: 18 } }, ticks: { font: { size: 16 }, callback: v => v + '%' }, grid: { color: '#e8e6dc' } },
+        x: { min: smartXMin, max: smartXMax, title: { display: true, text: '贡献率 (%)', font: { size: 18 } }, ticks: { font: { size: 16 }, callback: v => v + '%' }, grid: { color: '#e8e6dc' } },
+        y: { min: smartYMin, max: smartYMax, title: { display: true, text: '命中率 (%)', font: { size: 18 } }, ticks: { font: { size: 16 }, callback: v => v + '%' }, grid: { color: '#e8e6dc' } },
       }
     }
   });
@@ -1938,23 +2044,29 @@ function generateAnalysis() {
     return;
   }
 
-  // Read batch cutoffs
+  // Read batch cutoffs per category
   const batchLines = {};
-  const batchRows = document.querySelectorAll('#batchTableBody tr');
+  const cateList = ['物理', '历史'];
+  const subjKeys = ['yw','sx','yy','wl','ls','hx','sw','zz','dl'];
   let hasData = false;
-  batchRows.forEach(tr => {
-    const inputs = tr.querySelectorAll('input');
-    if (inputs.length === 0) return;
-    const batch = tr.dataset.batch;
-    if (!batch) return;
-    const line = { total: parseFloat(inputs[0].value) || 0 };
-    const subjKeys = ['yw','sx','yy','wl','ls','hx','sw','zz','dl'];
-    for (let i = 0; i < subjKeys.length; i++) {
-      line[subjKeys[i]] = parseFloat(inputs[i + 1].value) || 0;
-    }
-    if (line.total > 0) hasData = true;
-    batchLines[batch] = line;
-  });
+  for (let cate of cateList) {
+    const tb = document.getElementById(`batchTableBody_${cate}`);
+    if (!tb) continue;
+    const cateLines = {};
+    tb.querySelectorAll('tr').forEach(tr => {
+      const inputs = tr.querySelectorAll('input');
+      if (inputs.length === 0) return;
+      const batch = tr.dataset.batch;
+      if (!batch) return;
+      const line = { total: parseFloat(inputs[0].value) || 0 };
+      for (let i = 0; i < subjKeys.length; i++) {
+        line[subjKeys[i]] = parseFloat(inputs[i + 1].value) || 0;
+      }
+      if (line.total > 0) hasData = true;
+      cateLines[batch] = line;
+    });
+    batchLines[cate] = cateLines;
+  }
 
   if (!hasData) {
     showMsg('configMsg', '请填写至少一个批次的划线数据', 'error');
@@ -1997,6 +2109,7 @@ function generateAnalysis() {
   }
   window._analysisResults = {};
   window._selectedSchools = selectedSchools;
+  window._schoolOrder = [...selectedSchools].sort((a, b) => a.localeCompare(b, 'zh-CN'));
   window._batchLines = batchLines;
   window._examName = examName;
   window._categories = categories;
@@ -2014,7 +2127,7 @@ function generateAnalysis() {
 
   document.getElementById('resultsArea').style.display = 'block';
   document.getElementById('btnExportPDF').disabled = false;
-  document.getElementById('btnExportPDF').textContent = '📄 导出 PDF';
+  document.getElementById('btnExportPDF').textContent = '📦 导出图表';
 
   document.getElementById('loadingOverlay').classList.remove('active');
   document.getElementById('headerMeta').textContent = `${examName} · ${selectedSchools.length}校对比`;
@@ -2029,68 +2142,629 @@ function generateAnalysis() {
 function exportPDF() {
   const btn = document.getElementById('btnExportPDF');
   btn.disabled = true;
-  btn.textContent = '⏳ 生成中...';
+  btn.textContent = '⏳ 导出中...';
 
-  const element = document.getElementById('resultsArea');
+  const cats = window._categories || [];
+  if (!cats.length) { alert('请先生成分析报告'); btn.disabled = false; btn.textContent = '📦 导出图表'; return; }
+  const examName = window._examName || '联考质量分析';
 
-  // Store current sub-tab state and expand all contents for PDF
-  const tabGroups = document.querySelectorAll('.sub-tabs');
-  const tabState = {};
-  tabGroups.forEach(g => {
-    const id = g.id;
-    if (!id) return;
-    tabState[id] = [];
-    g.querySelectorAll('.sub-tab').forEach(t => tabState[id].push(t.classList.contains('active')));
-  });
-  // Expand all sub-tab contents
-  document.querySelectorAll('.sub-tab-content').forEach(el => el.classList.add('active'));
+  const zip = new JSZip();
+  let fileCount = 0;
+  const addFile = (name, dataUrl) => {
+    if (!dataUrl) return;
+    zip.file(name, dataUrl.split(',')[1], { base64: true });
+    fileCount++;
+  };
 
-  // Force browser reflow so hidden containers get computed dimensions
-  void document.getElementById('analysisContent').offsetHeight;
+  function getSubjKeys(cate) {
+    const rows = (window._filteredRaw || []).filter(r => (r.category || '').includes(cate) || r.category === cate);
+    return detectSubjects(rows);
+  }
 
-  // Force-resize charts that were created in hidden (display:none) containers
-  let resized = 0;
-  Object.keys(chartInstances).forEach(k => {
-    try {
-      const c = chartInstances[k];
-      c.resize();
-      resized++;
-    } catch(e) {}
-  });
+  function addChart(chartKey, folder, desc) {
+    const ci = chartInstances[chartKey];
+    const img = ci ? chartToImage(ci) : null;
+    if (img) addFile(`${folder}/${desc}.png`, img);
+  }
 
-  // Wait for chart resize + render before capturing
+  function addTable(headers, rows, colWidths, folder, desc, fontSize) {
+    if (!rows.length) return;
+    const canvas = drawTableOnCanvas(headers, rows, colWidths, { fontSize: fontSize || 12 });
+    addFile(`${folder}/${desc}.png`, canvas.toDataURL('image/png'));
+  }
+
+  // ======== PRE-EXPORT: render ALL charts for ALL categories ========
+  const offscreenCanvases = [];
+
+  // Helper: create off-screen canvas
+  function createOffscreenCanvas(id, w, h) {
+    const canvas = document.createElement('canvas');
+    canvas.width = w || 1200;
+    canvas.height = h || 600;
+    canvas.id = id;
+    canvas.style.cssText = 'position:absolute;left:-9999px;top:0;';
+    document.body.appendChild(canvas);
+    offscreenCanvases.push(canvas);
+    return canvas;
+  }
+
+  // Render contribution charts for ALL categories (already working, keep as is)
+  for (let cate of cats) {
+    const result = getResult(cate);
+    if (!result || !result.contribResult) continue;
+    const { validSchools, contribResult, subjKeys } = result;
+    const schoolsWithData = validSchools.filter(s => contribResult.schools[s] && Object.keys(contribResult.schools[s]).length > 0);
+    for (let si = 0; si < schoolsWithData.length; si++) {
+      const canvas = createOffscreenCanvas(`chart_contrib_${cate}_${si}`);
+      renderContribChart(cate, si, schoolsWithData[si], contribResult.schools[schoolsWithData[si]], subjKeys);
+    }
+  }
+
+  // Render top students charts for ALL categories and ALL configs (top30/100/200)
+  for (let cate of cats) {
+    const result = getResult(cate);
+    if (!result || result.error) continue;
+    const { validSchools, topData, subjKeys, coreSubjKeys, otherSubjKeys } = result;
+    const topConfigs = [{id:'top30',label:'前30名'},{id:'top100',label:'前100名'},{id:'top200',label:'前200名'}];
+    const topLabels = ['前30名', '前100名', '前200名'];
+
+    for (let ci = 0; ci < topConfigs.length; ci++) {
+      const cfg = topConfigs[ci];
+      const data = topData[cfg.id] ? topData[cfg.id].data : {};
+      if (!data || Object.keys(data).length === 0) continue;
+
+      // Chart 1: Core subjects + total
+      const cvs1 = createOffscreenCanvas(`chart_top1_${cate}_${ci}`);
+      if (cvs1) {
+        destroyChart(`top1_${cate}_${ci}`);
+        let barMin = Infinity, barMax = -Infinity;
+        for (let sk of coreSubjKeys) {
+          for (let s of validSchools) {
+            const v = data[s]?.[sk] || 0;
+            if (v < barMin) barMin = v;
+            if (v > barMax) barMax = v;
+          }
+        }
+        let totalMin = Infinity, totalMax = -Infinity;
+        for (let s of validSchools) {
+          const v = data[s]?.total || 0;
+          if (v < totalMin) totalMin = v;
+          if (v > totalMax) totalMax = v;
+        }
+        const yMin = 0;
+        const yMax = barMax / 0.58;
+        const totalRange = Math.max(totalMax - totalMin, 1);
+        const y1Min = totalMin - 2.83 * totalRange;
+        const y1Max = totalMax + 0.52 * totalRange;
+        const barDatasets = coreSubjKeys.map((sk, si) => ({
+          type: 'bar', label: keyToName(sk),
+          data: validSchools.map(s => data[s]?.[sk] || 0),
+          backgroundColor: getSubjectColor(sk),
+          borderRadius: 4, yAxisID: 'y',
+          datalabels: { anchor: 'end', align: 'end', offset: 20, color: '#333', font: { weight: 'bold', size: 15 }, formatter: v => v>0?v.toFixed(1):'' }
+        }));
+        const totalDataset = {
+          type: 'line', label: '总分',
+          data: validSchools.map(s => data[s]?.total || 0),
+          borderColor: SUBJECT_COLORS.total, backgroundColor: 'transparent',
+          pointBackgroundColor: SUBJECT_COLORS.total, pointRadius: 10, pointBorderColor: '#fff', pointBorderWidth: 2,
+          showLine: false, yAxisID: 'y1', fill: false,
+          datalabels: { anchor: 'end', align: 'top', offset: 24, color: SUBJECT_COLORS.total, font: { weight: 'bold', size: 17 }, formatter: v => v>0?v.toFixed(1):'' }
+        };
+        chartInstances[`top1_${cate}_${ci}`] = new Chart(cvs1, {
+          type: 'bar', data: { labels: validSchools, datasets: [...barDatasets, totalDataset] },
+          options: {
+            responsive: true, maintainAspectRatio: true, aspectRatio: 2,
+            plugins: {
+              legend: { position: 'top', labels: { font: { size: 18 } } },
+              datalabels: { display: ctx => ctx.dataset.type !== 'line' || ctx.dataset.label === '总分' }
+            },
+            scales: {
+              y: { min: yMin, max: yMax, title: { display: true, text: '语数外均分', font: { size: 18 } }, ticks: { font: { size: 16 } }, grid: { color: '#e8e6dc' } },
+              y1: { min: y1Min, max: y1Max, position: 'right', ticks: { display: false }, grid: { display: false } },
+              x: { ticks: { font: { size: 16 } }, grid: { display: false } }
+            }
+          }
+        });
+      }
+
+      // Chart 2: Other subjects
+      if (otherSubjKeys.length > 0) {
+        const cvs2 = createOffscreenCanvas(`chart_top2_${cate}_${ci}`);
+        if (cvs2) {
+          destroyChart(`top2_${cate}_${ci}`);
+          let otherMin = Infinity, otherMax = -Infinity;
+          for (let sk of otherSubjKeys) {
+            for (let s of validSchools) {
+              const v = data[s]?.[sk] || 0;
+              if (v < otherMin) otherMin = v;
+              if (v > otherMax) otherMax = v;
+            }
+          }
+          const otherMargin = Math.max(5, (otherMax - otherMin) * 0.15);
+          const otherYMin = Math.max(0, otherMin - otherMargin);
+          const otherDatasets = otherSubjKeys.map((sk, si) => ({
+            label: keyToName(sk),
+            data: validSchools.map(s => data[s]?.[sk] || 0),
+            backgroundColor: getSubjectColor(sk),
+            borderRadius: 4,
+            datalabels: { anchor: 'end', align: 'end', offset: 20, color: '#333', font: { weight: 'bold', size: 15 }, formatter: v => v>0?v.toFixed(1):'' }
+          }));
+          chartInstances[`top2_${cate}_${ci}`] = new Chart(cvs2, {
+            type: 'bar', data: { labels: validSchools, datasets: otherDatasets },
+            options: {
+              responsive: true, maintainAspectRatio: true, aspectRatio: 2,
+              plugins: {
+                legend: { position: 'top', labels: { font: { size: 18 } } },
+              },
+              scales: { y: { min: otherYMin, title: { display: true, text: '均分', font: { size: 18 } }, ticks: { font: { size: 16 } }, grid: { color: '#e8e6dc' } }, x: { ticks: { font: { size: 16 } }, grid: { display: false } } }
+            }
+          });
+        }
+      }
+    }
+
+    // Trend chart
+    if (result.trendLevels && result.trendLevels.length >= 2) {
+      const cvsTrend = createOffscreenCanvas(`chart_trend_${cate}`);
+      if (cvsTrend) {
+        destroyChart(`trend_${cate}`);
+        const datasets = validSchools.map((s,i) => ({
+          label: s, data: result.trendData[s]||[],
+          borderColor: getSchoolColor(s), backgroundColor: getSchoolColor(s),
+          pointBackgroundColor: getSchoolColor(s), pointRadius: 6, pointHoverRadius: 10,
+          borderWidth: 3, hoverBorderWidth: 5, tension: 0.3, fill: false,
+          datalabels: { display: false }
+        }));
+        chartInstances[`trend_${cate}`] = new Chart(cvsTrend, {
+          type: 'line', data: { labels: result.trendLevels, datasets },
+          options: {
+            responsive: true, maintainAspectRatio: true, aspectRatio: 2.2,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { position: 'top', labels: { font: { size: 18 } } },
+              tooltip: {
+                backgroundColor: '#141413', titleFont: { size: 16 },
+                bodyFont: { size: 15 }, padding: 12, cornerRadius: 8,
+                callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(1) }
+              }
+            },
+            hover: { mode: 'index', intersect: false },
+            scales: {
+              y: { beginAtZero: false, title: { display: true, text: '总分均分', font: { size: 18 } }, ticks: { font: { size: 16 } }, grid: { color: '#e8e6dc' } },
+              x: { offset: true, ticks: { font: { size: 16, weight: 'bold' } }, grid: { display: false } }
+            }
+          }
+        });
+      }
+    }
+  }
+
+  // Render cutoff charts for ALL categories
+  for (let cate of cats) {
+    const result = getResult(cate);
+    if (!result || result.error) continue;
+    const { validSchools, cutoffData } = result;
+    const batchLines = window._batchLines[cate] || {};
+    const batchNames = Object.keys(batchLines);
+    const batchColors = ['#d97757','#6a9bcc','#788c5d','#8b6faf','#5a8f7b','#c47f5a'];
+
+    if (batchNames.length === 0) continue;
+
+    // Chart 1: Count (bar)
+    const cvsCount = createOffscreenCanvas(`chart_cutoff_count_${cate}`);
+    if (cvsCount) {
+      destroyChart(`cutoff_count_${cate}`);
+      const countDatasets = batchNames.map((batch, bi) => ({
+        label: batch,
+        data: validSchools.map(s => cutoffData[s]?.batches[batch]?.totalPass || 0),
+        backgroundColor: batchColors[bi % batchColors.length] + 'cc',
+        borderColor: batchColors[bi % batchColors.length], borderWidth: 2, borderRadius: 4,
+        datalabels: { anchor: 'end', align: 'end', offset: 12, color: '#333', font: { weight: 'bold', size: 16 }, formatter: v => v > 0 ? v : '' }
+      }));
+      chartInstances[`cutoff_count_${cate}`] = new Chart(cvsCount, {
+        type: 'bar',
+        data: { labels: validSchools, datasets: countDatasets },
+        options: {
+          responsive: true, maintainAspectRatio: true, aspectRatio: 2,
+          plugins: { legend: { position: 'top', labels: { font: { size: 18 } } } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: '上线人数', font: { size: 18 } }, ticks: { font: { size: 16 } }, grid: { color: '#e8e6dc' } }, x: { ticks: { font: { size: 16 } }, grid: { display: false } } }
+        }
+      });
+    }
+
+    // Chart 2: Rate (line)
+    const cvsRate = createOffscreenCanvas(`chart_cutoff_rate_${cate}`);
+    if (cvsRate) {
+      destroyChart(`cutoff_rate_${cate}`);
+      const rateDatasets = batchNames.map((batch, bi) => ({
+        label: batch,
+        data: validSchools.map(s => ((cutoffData[s]?.batches[batch]?.totalRate || 0) * 100)),
+        borderColor: batchColors[bi % batchColors.length],
+        backgroundColor: batchColors[bi % batchColors.length] + '22',
+        pointBackgroundColor: batchColors[bi % batchColors.length], pointRadius: 7, borderWidth: 3, tension: 0.3, fill: false,
+        datalabels: { display: false }
+      }));
+      chartInstances[`cutoff_rate_${cate}`] = new Chart(cvsRate, {
+        type: 'line',
+        data: { labels: validSchools, datasets: rateDatasets },
+        options: {
+          responsive: true, maintainAspectRatio: true, aspectRatio: 2,
+          layout: { padding: { top: 10, left: 30, right: 30 } },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top', labels: { font: { size: 18 } } },
+            tooltip: {
+              backgroundColor: '#141413', titleFont: { size: 16 },
+              bodyFont: { size: 15 }, padding: 12, cornerRadius: 8,
+              callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(1) + '%' }
+            }
+          },
+          scales: {
+            y: { beginAtZero: true, max: 100, title: { display: true, text: '上线率 (%)', font: { size: 18 } }, ticks: { font: { size: 16 }, callback: v => v + '%' }, grid: { color: '#e8e6dc' } },
+            x: { offset: true, ticks: { font: { size: 16 } }, grid: { display: false } }
+          }
+        }
+      });
+    }
+  }
+
+  // Render pct charts for ALL categories
+  for (let cate of cats) {
+    const result = getResult(cate);
+    if (!result || result.error) continue;
+    const { validSchools, pctData, subjKeys } = result;
+    if (!pctData) continue;
+
+    // Chart 1: Core subjects + total
+    const cvs1 = createOffscreenCanvas(`chart_pct_1_${cate}`);
+    if (cvs1) {
+      destroyChart(`pct_1_${cate}`);
+      const coreKeys = subjKeys.filter(k => ['yw','sx','yy','total'].includes(k));
+      const coreSubjects = coreKeys.filter(k => k !== 'total');
+      let barMin = Infinity, barMax = -Infinity;
+      for (let sk of coreSubjects) {
+        for (let s of validSchools) {
+          const v = pctData[s]?.[sk] || 0;
+          if (v < barMin) barMin = v;
+          if (v > barMax) barMax = v;
+        }
+      }
+      let totalMin = Infinity, totalMax = -Infinity;
+      for (let s of validSchools) {
+        const v = pctData[s]?.total || 0;
+        if (v < totalMin) totalMin = v;
+        if (v > totalMax) totalMax = v;
+      }
+      const yMin = 0;
+      const yMax = barMax / 0.58;
+      const totalRange = Math.max(totalMax - totalMin, 1);
+      const y1Min = totalMin - 2.83 * totalRange;
+      const y1Max = totalMax + 0.52 * totalRange;
+      const barDatasets = coreSubjects.map((sk, si) => ({
+        type: 'bar', label: keyToName(sk),
+        data: validSchools.map(s => pctData[s]?.[sk] || 0),
+        backgroundColor: getSubjectColor(sk),
+        borderRadius: 4, yAxisID: 'y',
+        datalabels: { anchor: 'end', align: 'end', offset: 20, color: '#333', font: { weight: 'bold', size: 15 }, formatter: v => v>0?v.toFixed(1):'' }
+      }));
+      const totalDataset = {
+        type: 'line', label: '总分',
+        data: validSchools.map(s => pctData[s]?.total || 0),
+        borderColor: SUBJECT_COLORS.total, backgroundColor: 'transparent',
+        pointBackgroundColor: SUBJECT_COLORS.total, pointRadius: 10, pointBorderColor: '#fff', pointBorderWidth: 2,
+        showLine: false, yAxisID: 'y1', fill: false,
+        datalabels: { anchor: 'end', align: 'top', offset: 24, color: SUBJECT_COLORS.total, font: { weight: 'bold', size: 17 }, formatter: v => v>0?v.toFixed(1):'' }
+      };
+      chartInstances[`pct_1_${cate}`] = new Chart(cvs1, {
+        type: 'bar', data: { labels: validSchools, datasets: [...barDatasets, totalDataset] },
+        options: {
+          responsive: true, maintainAspectRatio: true, aspectRatio: 2,
+          plugins: {
+            legend: { position: 'top', labels: { font: { size: 18 } } },
+            datalabels: { display: ctx => ctx.dataset.type !== 'line' || ctx.dataset.label === '总分' }
+          },
+          scales: {
+            y: { min: yMin, max: yMax, title: { display: true, text: '语数外均分', font: { size: 18 } }, ticks: { font: { size: 16 } }, grid: { color: '#e8e6dc' } },
+            y1: { min: y1Min, max: y1Max, position: 'right', ticks: { display: false }, grid: { display: false } },
+            x: { ticks: { font: { size: 16 } }, grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    // Chart 2: Other subjects
+    const otherKeys = subjKeys.filter(k => !['yw','sx','yy','total'].includes(k));
+    if (otherKeys.length > 0) {
+      const cvs2 = createOffscreenCanvas(`chart_pct_2_${cate}`);
+      if (cvs2) {
+        destroyChart(`pct_2_${cate}`);
+        let otherMin = Infinity, otherMax = -Infinity;
+        for (let sk of otherKeys) {
+          for (let s of validSchools) {
+            const v = pctData[s]?.[sk] || 0;
+            if (v < otherMin) otherMin = v;
+            if (v > otherMax) otherMax = v;
+          }
+        }
+        const otherMargin = Math.max(5, (otherMax - otherMin) * 0.15);
+        const otherYMin = Math.max(0, otherMin - otherMargin);
+        const otherDatasets = otherKeys.map((sk, si) => ({
+          label: keyToName(sk),
+          data: validSchools.map(s => pctData[s]?.[sk] || 0),
+          backgroundColor: getSubjectColor(sk),
+          borderRadius: 4,
+          datalabels: { anchor: 'end', align: 'end', offset: 20, color: '#333', font: { weight: 'bold', size: 15 }, formatter: v => v>0?v.toFixed(1):'' }
+        }));
+        chartInstances[`pct_2_${cate}`] = new Chart(cvs2, {
+          type: 'bar', data: { labels: validSchools, datasets: otherDatasets },
+            options: {
+            responsive: true, maintainAspectRatio: true, aspectRatio: 2,
+            plugins: { legend: { position: 'top', labels: { font: { size: 18 } } } },
+            scales: { y: { min: otherYMin, title: { display: true, text: '均分', font: { size: 18 } }, ticks: { font: { size: 16 } }, grid: { color: '#e8e6dc' } }, x: { ticks: { font: { size: 16 } }, grid: { display: false } } }
+          }
+        });
+      }
+    }
+  }
+
+  // Render elite charts for ALL categories
+  for (let cate of cats) {
+    const result = getResult(cate);
+    if (!result || result.error) continue;
+    const { validSchools, eliteData, eliteThresholds } = result;
+    if (!eliteData || !eliteThresholds || eliteThresholds.length === 0) continue;
+
+    const cvsElite = createOffscreenCanvas(`chart_elite_${cate}`);
+    if (cvsElite) {
+      destroyChart(`elite_${cate}`);
+      const tColors = ['#d97757','#6a9bcc','#788c5d','#8b6faf','#c47f5a'];
+      const eliteDatasets = eliteThresholds.map((t, ti) => ({
+        label: '前' + t + '名',
+        data: validSchools.map(s => {
+          const ed = eliteData[t];
+          return ed.total > 0 ? (ed.counts[s] || 0) / ed.total * 100 : 0;
+        }),
+        backgroundColor: tColors[ti % tColors.length] + 'bb',
+        borderColor: tColors[ti % tColors.length], borderWidth: 2, borderRadius: 3,
+        datalabels: { anchor: 'end', align: 'end', offset: 12, color: '#333', font: { weight: 'bold', size: 15 }, formatter: v => v.toFixed(1) + '%' }
+      }));
+      chartInstances[`elite_${cate}`] = new Chart(cvsElite, {
+        type: 'bar', data: { labels: validSchools, datasets: eliteDatasets },
+        options: {
+          responsive: true, maintainAspectRatio: true, aspectRatio: 2,
+          plugins: { legend: { position: 'top', labels: { font: { size: 18 } } } },
+          scales: {
+            y: { beginAtZero: true, max: 100, title: { display: true, text: '占比 (%)', font: { size: 18 } }, ticks: { font: { size: 16 }, callback: v => v + '%' }, grid: { color: '#e8e6dc' } },
+            x: { ticks: { font: { size: 16 } }, grid: { display: false } }
+          }
+        }
+      });
+    }
+  }
+
+  // Async: wait for all charts to render, then resize & export
   setTimeout(() => {
-    const opt = {
-      margin: [10, 12, 10, 12],
-      filename: `${window._examName || '联考质量分析'}_报告.pdf`,
-      image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: true, letterRendering: true },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-      pagebreak: { mode: ['avoid-all', 'css', 'legacy'], before: '.analysis-section', avoid: ['.chart-container', '.table-container', '.sub-tab-content'] },
-    };
+    void document.body.offsetHeight;
+    Object.keys(chartInstances).forEach(k => {
+      try { chartInstances[k].resize(); } catch(e) {}
+    });
 
-    html2pdf().set(opt).from(element).save().then(() => {
+    const schools = window._selectedSchools || [];
+
+  // ================================================================
+  // SECTION 1: 联考概览
+  // ================================================================
+  for (let cate of cats) {
+    const sfx = `01_联考概览/${cate}`;
+    const cateRows = (window._filteredRaw || []).filter(r => (r.category || '').includes(cate) || r.category === cate);
+
+    // Batch cutoff table
+    const cateBatchLines = (window._batchLines[cate] || {});
+    const batchNames = Object.keys(cateBatchLines);
+    if (batchNames.length) {
+      const subjAll = getSubjKeys(cate);
+      const bHeaders = ['批次', '总分线', ...subjAll.map(keyToName)];
+      const bColW = [22, 14, ...subjAll.map(() => 16)];
+      const bRows = batchNames.map(b => {
+        const line = cateBatchLines[b];
+        return [b, line.total > 0 ? line.total : '-', ...subjAll.map(k => line[k] > 0 ? line[k] : '-')];
+      });
+      addTable(bHeaders, bRows, bColW, sfx, '批次划线');
+    }
+
+    // School overview table
+    const schHeaders = ['学校', '参考人数', '总分均分', '最高分'];
+    const schColW = [46, 22, 22, 22];
+    const schRows = schools.map(s => {
+      const sr = cateRows.filter(r => r.school === s);
+      const st = sr.map(r => r.total).filter(t => t > 0);
+      return [s, sr.length,
+        st.length ? (st.reduce((a, b) => a + b, 0) / st.length).toFixed(1) : '-',
+        st.length ? Math.max(...st).toFixed(0) : '-'
+      ];
+    });
+    schRows.sort((a, b) => parseFloat(b[2] || 0) - parseFloat(a[2] || 0));
+    addTable(schHeaders, schRows, schColW, sfx, '各校核心数据');
+  }
+
+  // ================================================================
+  // SECTION 2: 各校上线对比
+  // ================================================================
+  for (let cate of cats) {
+    const sfx = `02_各校上线对比/${cate}`;
+    addChart(`cutoff_count_${cate}`, sfx, '各批次上线人数');
+    addChart(`cutoff_rate_${cate}`, sfx, '各批次上线率');
+
+    const result = getResult(cate);
+    if (result && !result.error) {
+      const { validSchools, cutoffData } = result;
+      const batchNames = Object.keys(window._batchLines[cate] || {});
+      const cbHeaders = ['学校', '参考人数'];
+      for (let b of batchNames) cbHeaders.push(b + '人数', b + '率');
+      const cbColW = [30, 14, ...batchNames.flatMap(() => [16, 16])];
+      const cbRows = validSchools.map(s => {
+        const entry = cutoffData[s];
+        const row = [s, entry ? entry.refCount : 0];
+        for (let b of batchNames) {
+          const d = entry ? entry.batches[b] : null;
+          row.push(d ? d.totalPass : 0, d ? (d.totalRate * 100).toFixed(1) + '%' : '0.0%');
+        }
+        return row;
+      });
+      addTable(cbHeaders, cbRows, cbColW, sfx, '上线数据明细', 11);
+    }
+  }
+
+  // ================================================================
+  // SECTION 3: 尖子生排名
+  // ================================================================
+  for (let cate of cats) {
+    const sfx = `03_尖子生排名/${cate}`;
+    const cateRows = (window._filteredRaw || []).filter(r => (r.category || '').includes(cate) || r.category === cate);
+    const topN = cate === '物理' ? 30 : 10;
+    const rankRows = [...cateRows].sort((a, b) => b.total - a.total).slice(0, topN);
+    const subjKeys = getSubjKeys(cate);
+    const rkHeaders = ['排名', '学校', ...subjKeys.map(keyToName), '总分'];
+    const rkColW = [10, 30, ...subjKeys.map(() => 16), 18];
+
+    const buildRankRows = (from, to) => rankRows.slice(from, to).map((r, i) => [
+      from + i + 1, r.school,
+      ...subjKeys.map(k => r.scores[k] > 0 ? r.scores[k].toFixed(0) : '-'),
+      r.total.toFixed(0)
+    ]);
+
+    if (rankRows.length <= 15) {
+      addTable(rkHeaders, buildRankRows(0, rankRows.length), rkColW, sfx, `前${topN}名成绩排名`, 11);
+    } else {
+      addTable(rkHeaders, buildRankRows(0, 15), rkColW, sfx, `前${topN}名-第1-15名`, 11);
+      addTable(rkHeaders, buildRankRows(15, rankRows.length), rkColW, sfx, `前${topN}名-第16-${rankRows.length}名`, 11);
+    }
+  }
+
+  // ================================================================
+  // SECTION 4: 尖子生分层均分对比
+  // ================================================================
+  for (let cate of cats) {
+    const sfx = `04_尖子生分层均分对比/${cate}`;
+    const topLabels = ['前30名', '前100名', '前200名'];
+    for (let ci = 0; ci < 3; ci++) {
+      addChart(`top1_${cate}_${ci}`, sfx, `${topLabels[ci]}-语数外+总分`);
+      addChart(`top2_${cate}_${ci}`, sfx, `${topLabels[ci]}-其他学科均分`);
+    }
+    addChart(`trend_${cate}`, sfx, '跨层级总分均分趋势');
+
+    const result = getResult(cate);
+    if (result && !result.error) {
+      const td = result.topData && result.topData.top30 ? result.topData.top30.data : {};
+      const tHeaders = ['学校', '总分', ...result.subjKeys.map(keyToName)];
+      const tColW = [32, 14, ...result.subjKeys.map(() => 14)];
+      const tRows = result.validSchools.map(s => {
+        const d = td[s] || {};
+        return [s, (d.total || 0).toFixed(1), ...result.subjKeys.map(k => d[k] > 0 ? d[k].toFixed(1) : '-')];
+      });
+      addTable(tHeaders, tRows, tColW, sfx, '前30名各校均分明细', 11);
+    }
+  }
+
+  // ================================================================
+  // SECTION 5: 前30%均分对比
+  // ================================================================
+  for (let cate of cats) {
+    const sfx = `05_前30%均分对比/${cate}`;
+    addChart(`pct_1_${cate}`, sfx, '语数外均分+总分');
+    addChart(`pct_2_${cate}`, sfx, '其他学科均分');
+
+    const result = getResult(cate);
+    if (result && !result.error) {
+      const pd = result.pctData || {};
+      const pHdrs = ['学校', '总分', ...result.subjKeys.map(keyToName)];
+      const pColW = [30, 14, ...result.subjKeys.map(() => 14)];
+      const pRows = [...result.validSchools].sort((a, b) => (pd[b]?.total || 0) - (pd[a]?.total || 0)).map(s => {
+        const d = pd[s] || {};
+        return [s, (d.total || 0).toFixed(1), ...result.subjKeys.map(k => d[k] > 0 ? d[k].toFixed(1) : '-')];
+      });
+      addTable(pHdrs, pRows, pColW, sfx, `前${result.pct}%各校均分明细`, 11);
+    }
+  }
+
+  // ================================================================
+  // SECTION 6: 优秀生分布
+  // ================================================================
+  for (let cate of cats) {
+    const sfx = `06_优秀生分布/${cate}`;
+    addChart(`elite_${cate}`, sfx, '各校优秀生分布对比');
+
+    const result = getResult(cate);
+    if (result && !result.error) {
+      const eHdrs = ['学校'];
+      for (let t of result.eliteThresholds) eHdrs.push('前' + t + '名人数', '前' + t + '名占比');
+      const eColW = [30];
+      for (let i = 0; i < result.eliteThresholds.length; i++) eColW.push(16, 16);
+      const eRows = result.validSchools.map(s => {
+        const row = [s];
+        for (let t of result.eliteThresholds) {
+          const ed = result.eliteData[t];
+          const cnt = ed.counts[s] || 0;
+          const pct = ed.total > 0 ? (cnt / ed.total * 100).toFixed(1) + '%' : '0.0%';
+          row.push(cnt, pct);
+        }
+        return row;
+      });
+      addTable(eHdrs, eRows, eColW, sfx, '优秀生各校人数及占比明细', 11);
+    }
+  }
+
+  // ================================================================
+  // SECTION 7: 学科贡献度
+  // ================================================================
+  for (let cate of cats) {
+    const result = getResult(cate);
+    if (result && !result.error && result.contribResult) {
+      const cr = result.contribResult;
+      if (cr.schools) {
+        const subjKeys = result.subjKeys || [];
+        const validSchools = result.validSchools || [];
+        const schoolsWithData = validSchools.filter(s => cr.schools[s] && Object.keys(cr.schools[s]).length > 0);
+      for (let si = 0; si < schoolsWithData.length; si++) {
+          const s = schoolsWithData[si];
+          const sfx = `07_学科贡献度/${cate}/${s}`;
+          addChart(`contrib_${cate}_${si}`, sfx, '气泡图');
+          const cs = cr.schools[s] || {};
+          const cHdrs = ['学科', '双上线', '贡献率', '命中率', '参考人数', '等级'];
+          const cColW = [22, 14, 14, 14, 16, 12];
+          const cRows = subjKeys.map(sk => {
+            const d = cs[sk];
+            if (!d || d.refCount === 0) return null;
+            return [keyToName(sk), d.doublePass, d.contribRate + '%', d.hitRate + '%', d.refCount, d.grade];
+          }).filter(r => r !== null);
+          addTable(cHdrs, cRows, cColW, sfx, '贡献度明细', 11);
+        }
+      }
+    }
+  }
+
+  // ================================================================
+  // DOWNLOAD ZIP
+  // ================================================================
+  const fileName = `${examName}_分析图表.zip`;
+  zip.generateAsync({ type: 'blob' }).then(content => {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(content);
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    offscreenCanvases.forEach(c => c.remove());
     btn.disabled = false;
-    btn.textContent = '📄 导出 PDF';
-    document.querySelectorAll('.sub-tab-content').forEach(el => el.classList.remove('active'));
-    // Restore per-group tab state
-    Object.keys(tabState).forEach(id => {
-      const tabs = document.querySelectorAll(`#${id} .sub-tab`);
-      tabState[id].forEach((isActive, i) => { if (tabs[i]) tabs[i].classList.toggle('active', isActive); });
-    });
-    // Restore content visibility for each tab group (matching prefix naming)
-    Object.keys(tabState).forEach(id => {
-      const contentType = id.replace(/Tabs.+$/, 'Content');
-      // e.g., topTabs_物理 -> topContent_物理_
-      const prefix = id.replace(/Tabs_/, 'Content_');
-      const contents = document.querySelectorAll(`[id^="${prefix}"]`);
-      tabState[id].forEach((isActive, i) => { if (contents[i]) contents[i].classList.toggle('active', isActive); });
-    });
+    btn.textContent = '📦 导出图表';
   }).catch(err => {
-    console.error('PDF error:', err);
+    console.error('ZIP error:', err);
+    alert('导出失败，请重试');
+    offscreenCanvases.forEach(c => c.remove());
     btn.disabled = false;
-    btn.textContent = '📄 导出 PDF';
-    alert('PDF 导出失败，请重试或检查控制台错误');
+    btn.textContent = '📦 导出图表';
   });
   }, 400);
 }
@@ -2108,9 +2782,14 @@ function showMsg(id, text, type) {
 // =============================================================
 // FILE UPLOAD HANDLING
 // =============================================================
-(function() {
+document.addEventListener('DOMContentLoaded', function() {
   const uploadZone = document.getElementById('uploadZone');
   const fileInput = document.getElementById('fileInput');
+
+  if (!uploadZone || !fileInput) {
+    console.error('Upload zone or file input not found!');
+    return;
+  }
 
   uploadZone.addEventListener('click', () => fileInput.click());
 
@@ -2131,7 +2810,7 @@ function showMsg(id, text, type) {
   fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) handleFile(e.target.files[0]);
   });
-})();
+});
 
 function handleFile(file) {
   const fileName = document.getElementById('fileName');
@@ -2331,8 +3010,6 @@ function loadDemoData() {
 }
 
 function populateBatchTable(parsed) {
-  const tbody = document.getElementById('batchTableBody');
-  tbody.innerHTML = '';
   const subjKeys = ['yw','sx','yy','wl','ls','hx','sw','zz','dl'];
   const subjLabels = ['总分','语文','数学','英语','物理','历史','化学','生物','政治','地理'];
 
@@ -2343,29 +3020,48 @@ function populateBatchTable(parsed) {
     maxScores[sk] = vals.length > 0 ? Math.max(...vals) : 100;
   }
 
-  // Default batch lines (approximate 750 full marks)
   const defaults = {
-    '超一流': { total: 660, yw: 125, sx: 135, yy: 135, wl: 90, ls: 85, hx: 92, sw: 92, zz: 88, dl: 88 },
-    '600分': { total: 600, yw: 118, sx: 120, yy: 125, wl: 82, ls: 78, hx: 85, sw: 85, zz: 82, dl: 82 },
-    '双一流': { total: 560, yw: 110, sx: 108, yy: 115, wl: 72, ls: 70, hx: 78, sw: 78, zz: 75, dl: 75 },
-    '一本线': { total: 510, yw: 100, sx: 95, yy: 105, wl: 62, ls: 60, hx: 68, sw: 68, zz: 65, dl: 65 },
+    '物理': {
+      '超一流': { total: 666, yw: 127, sx: 137, yy: 143, wl: 88, hx: 100, sw: 99, zz: 0, dl: 0 },
+      '600分': { total: 600, yw: 118, sx: 115, yy: 135.5, wl: 72, hx: 95, sw: 94, zz: 0, dl: 0 },
+      '双一流': { total: 569, yw: 114, sx: 102, yy: 129.5, wl: 64, hx: 92, sw: 91, zz: 97, dl: 100 },
+      '一本线': { total: 440, yw: 99, sx: 54, yy: 95.5, wl: 32, hx: 74, sw: 75, zz: 83, dl: 84 },
+    },
+    '历史': {
+      '超一流': { total: 606, yw: 126, sx: 116, yy: 142, ls: 85, zz: 100, dl: 100, wl: 0, hx: 0, sw: 0 },
+      '600分': { total: 600, yw: 124, sx: 106, yy: 138, ls: 84, zz: 98, dl: 96, wl: 0, hx: 0, sw: 0 },
+      '双一流': { total: 557, yw: 116, sx: 78, yy: 128, ls: 78, zz: 93, dl: 92, wl: 0, hx: 0, sw: 0 },
+      '一本线': { total: 482, yw: 105, sx: 43, yy: 105, ls: 66, zz: 81, dl: 80, wl: 0, hx: 0, sw: 0 },
+    }
   };
 
-  for (let batch of BATCH_NAMES) {
-    const d = defaults[batch] || {};
-    const tr = document.createElement('tr');
-    tr.dataset.batch = batch;
-    let html = `<td class="sticky-col"><strong>${batch}</strong></td>`;
-    const allKeys = ['total', ...subjKeys];
-    for (let k of allKeys) {
-      let val = d[k] || '';
-      // Use max score as placeholder hint
-      const hint = k === 'total' ? '' : '';
-      html += `<td><input type="number" value="${val}" placeholder="${Math.round(maxScores[k] || 100)}" min="0"></td>`;
+  for (let cate of ['物理', '历史']) {
+    const tbody = document.getElementById(`batchTableBody_${cate}`);
+    tbody.innerHTML = '';
+    const cateDefaults = defaults[cate] || {};
+    for (let batch of BATCH_NAMES) {
+      const d = cateDefaults[batch] || {};
+      const tr = document.createElement('tr');
+      tr.dataset.batch = batch;
+      let html = `<td class="sticky-col"><strong>${batch}</strong></td>`;
+      const allKeys = ['total', ...subjKeys];
+      for (let k of allKeys) {
+        const val = d[k] || '';
+        const hint = '';
+        html += `<td><input type="number" step="any" value="${val}" placeholder="" min="0"></td>`;
+      }
+      tr.innerHTML = html;
+      tbody.appendChild(tr);
     }
-    tr.innerHTML = html;
-    tbody.appendChild(tr);
   }
+}
+
+function switchBatchCate(cate) {
+  document.querySelectorAll('#batchCateTabs .sub-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.cate === cate);
+  });
+  document.getElementById('batchTableBody_物理').style.display = cate === '物理' ? '' : 'none';
+  document.getElementById('batchTableBody_历史').style.display = cate === '历史' ? '' : 'none';
 }
 
 // =============================================================
@@ -2373,7 +3069,7 @@ function populateBatchTable(parsed) {
 // =============================================================
 
 // Header auto-hide on scroll past hero
-(function() {
+document.addEventListener('DOMContentLoaded', function() {
   const header = document.querySelector('.app-header');
   const configSection = document.getElementById('config-section');
   if (header && configSection) {
@@ -2392,7 +3088,7 @@ function populateBatchTable(parsed) {
     window.addEventListener('scroll', check, { passive: true });
     check();
   }
-})();
+});
 
 console.log('校级联考质量分析系统已加载');
 </script>
