@@ -1122,14 +1122,14 @@ function getSchoolColor(nameOrIndex) {
 const SUBJECT_COLORS = {
   // 9 个学科各配独立颜色，任何场景下同一学科用同一颜色
   yw: '#d97757',  // 语文 - 赤陶橙
-  sx: '#3b7fa0',  // 数学 - 钢青蓝
+  sx: '#1565c0',  // 数学 - 亮蓝
   yy: '#4caf50',  // 英语 - 青草绿
   total: '#8b6faf',  // 总分 - 烟灰紫
   wl: '#8e44ad',  // 物理 - 暗紫
   ls: '#e67e22',  // 历史 - 琥珀橙
-  hx: '#e74c3c',  // 化学 - 朱砂红
+  hx: '#ff0000',  // 化学 - 鲜红
   dl: '#795548',  // 地理 - 焦茶棕
-  sw: '#00897b',  // 生物 - 深青绿
+  sw: '#2e7d32',  // 生物 - 森林绿
   zz: '#3498db',  // 政治 - 天蓝
 };
 function getSubjectColor(key) { return SUBJECT_COLORS[key] || '#888'; }
@@ -2714,14 +2714,16 @@ function exportPDF() {
 
     const result = getResult(cate);
     if (result && !result.error) {
-      const td = result.topData && result.topData.top30 ? result.topData.top30.data : {};
       const tHeaders = ['学校', '总分', ...result.subjKeys.map(keyToName)];
       const tColW = [32, 14, ...result.subjKeys.map(() => 14)];
-      const tRows = result.validSchools.map(s => {
-        const d = td[s] || {};
-        return [s, (d.total || 0).toFixed(1), ...result.subjKeys.map(k => d[k] > 0 ? d[k].toFixed(1) : '-')];
-      });
-      addTable(tHeaders, tRows, tColW, sfx, '前30名各校均分明细', 11);
+      for (let ci = 0; ci < 3; ci++) {
+        const td = result.topData && result.topData[topConfigs[ci].id] ? result.topData[topConfigs[ci].id].data : {};
+        const tRows = result.validSchools.map(s => {
+          const d = td[s] || {};
+          return [s, (d.total || 0).toFixed(1), ...result.subjKeys.map(k => d[k] > 0 ? d[k].toFixed(1) : '-')];
+        });
+        addTable(tHeaders, tRows, tColW, sfx, `${topLabels[ci]}各校均分明细`, 11);
+      }
     }
   }
 
