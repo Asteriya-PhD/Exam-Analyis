@@ -16,5 +16,8 @@ npm-debug.log*
 tmp/
 temp/
 
-# Large files (tracked but .gitignore can list data files if needed)
-# *.xlsx is tracked because they're sample data
+# ⚠️ 铁律: 考试真实数据严禁上传
+# 仅允许通过 app 内置 loadDemoData() 生成的模拟数据
+*.xlsx
+*.xls
+*.pdf
