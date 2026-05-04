@@ -2706,6 +2706,7 @@ function exportPDF() {
   for (let cate of cats) {
     const sfx = `04_尖子生分层均分对比/${cate}`;
     const topLabels = ['前30名', '前100名', '前200名'];
+    const topConfigs = [{id:'top30',label:'前30名'},{id:'top100',label:'前100名'},{id:'top200',label:'前200名'}];
     for (let ci = 0; ci < 3; ci++) {
       addChart(`top1_${cate}_${ci}`, sfx, `${topLabels[ci]}-语数外+总分`);
       addChart(`top2_${cate}_${ci}`, sfx, `${topLabels[ci]}-其他学科均分`);
