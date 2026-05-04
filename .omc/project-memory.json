@@ -1,0 +1,17 @@
+{
+  "techStack": "Chart.js 4.x + SheetJS + chartjs-plugin-datalabels + JSZip",
+  "build": "Single-file HTML app (~3100 lines), no build step",
+  "conventions": "Anthropic brand colors (#141413, #faf9f5, #d97757, #6a9bcc, #788c5d). ≥18px fonts. Full-width layout. Per-section category tabs (物理/历史). Landscape A4 print with page-break-before per section.",
+  "structure": "exam-analysis.html (single file, ~3094 lines). 7 analysis sections + overview: overview, cutoff-comparison, top-student-ranking, top-student-tiered-avg, top-pct-avg, elite-distribution, subject-contribution. JS core: computeResult() parses data, render*() functions create HTML+charts, exportPDF() uses JSZip + offscreen Canvas.",
+  "notes": {
+    "batch_lines": "4 lines: 超一流/600分/双一流/一本线. Total + per-subject cutoffs. Edit table in UI.",
+    "school_limit": "5-6 schools (SCHOOL_COLORS palette has 9 colors but practical limit due to readability).",
+    "categories": "物理 + 历史 only, per-section tabs (independent switches).",
+    "data_format": "Raw student records (one row per student), not pivot tables. Expected columns: 学校, 科类, 各科分数, 总分.",
+    "demo_data": "5 schools, 物理/历史 split, random elective choices, injected elite students for 超一流/600分 data.",
+    "export": "JSZip-based ZIP export. Creates offscreen canvases for all categories/sub-tabs, renders charts via Chart.js, captures via toDataURL(), draws tables on canvas via drawTableOnCanvas(). Output folder structure by category."
+  },
+  "version": "1.1.0",
+  "lastScanned": 1777207697360,
+  "projectRoot": "/Users/zhewenliu/Claude/Exam-Analyis"
+}
